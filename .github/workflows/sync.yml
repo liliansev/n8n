@@ -13,14 +13,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
         with:
-          repository: 'original_owner/original_repo' # Remplacez par le dépôt original
+          repository: 'n8n-io/n8n' # Remplacez par le dépôt original
           ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Checkout Fork
         uses: actions/checkout@v2
         with:
-          repository: 'your_username/your_repo' # Remplacez par votre dépôt forké
+          repository: 'liliansev/n8n' # Remplacez par votre dépôt forké
           ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
           path: fork
