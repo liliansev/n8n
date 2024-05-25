@@ -1,0 +1,33 @@
+name: Sync Fork
+
+on:
+  schedule:
+    - cron: '0 0 * * 1' # Synchronise chaque lundi à minuit
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          repository: 'original_owner/original_repo' # Remplacez par le dépôt original
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout Fork
+        uses: actions/checkout@v2
+        with:
+          repository: 'your_username/your_repo' # Remplacez par votre dépôt forké
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: fork
+
+      - name: Sync Fork
+        run: |
+          cd fork
+          git pull origin main
+          git pull ../main main
+          git push origin main
