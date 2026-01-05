@@ -1,6 +1,6 @@
-import type { INode } from '../Interfaces';
 import { ExecutionBaseError } from './abstract/execution-base.error';
-import type { ApplicationError } from './application.error';
+import type { ApplicationError } from '@n8n/errors';
+import type { INode } from '../interfaces';
 
 interface WorkflowActivationErrorOptions {
 	cause?: Error;
@@ -41,7 +41,15 @@ export class WorkflowActivationError extends ExecutionBaseError {
 			return;
 		}
 
-		if (['ETIMEDOUT', 'ECONNREFUSED', 'EAUTH'].some((code) => this.message.includes(code))) {
+		if (
+			[
+				'etimedout', // Node.js
+				'econnrefused', // Node.js
+				'eauth', // OAuth
+				'temporary authentication failure', // IMAP server
+				'invalid credentials',
+			].some((str) => this.message.toLowerCase().includes(str))
+		) {
 			this.level = 'warning';
 			return;
 		}

@@ -1,9 +1,7 @@
-import { Container } from 'typedi';
-import config from '@/config';
+import { mockInstance } from '@n8n/backend-test-utils';
+import { GLOBAL_OWNER_ROLE, type User } from '@n8n/db';
+import { Container } from '@n8n/di';
 import axios from 'axios';
-import syslog from 'syslog-client';
-import { v4 as uuid } from 'uuid';
-import type { SuperAgentTest } from 'supertest';
 import type {
 	MessageEventBusDestinationSentryOptions,
 	MessageEventBusDestinationSyslogOptions,
@@ -14,26 +12,36 @@ import {
 	defaultMessageEventBusDestinationSyslogOptions,
 	defaultMessageEventBusDestinationWebhookOptions,
 } from 'n8n-workflow';
+import syslog from 'syslog-client';
+import { v4 as uuid } from 'uuid';
 
-import type { User } from '@db/entities/User';
-import { MessageEventBus } from '@/eventbus/MessageEventBus/MessageEventBus';
-import { EventMessageGeneric } from '@/eventbus/EventMessageClasses/EventMessageGeneric';
-import type { MessageEventBusDestinationSyslog } from '@/eventbus/MessageEventBusDestination/MessageEventBusDestinationSyslog.ee';
-import type { MessageEventBusDestinationWebhook } from '@/eventbus/MessageEventBusDestination/MessageEventBusDestinationWebhook.ee';
-import type { MessageEventBusDestinationSentry } from '@/eventbus/MessageEventBusDestination/MessageEventBusDestinationSentry.ee';
-import { EventMessageAudit } from '@/eventbus/EventMessageClasses/EventMessageAudit';
-import type { EventNamesTypes } from '@/eventbus/EventMessageClasses';
-import { ExecutionDataRecoveryService } from '@/eventbus/executionDataRecovery.service';
+import { mock } from 'jest-mock-extended';
 
-import * as utils from './shared/utils';
+import type { EventNamesTypes } from '@/eventbus/event-message-classes';
+import { EventMessageAudit } from '@/eventbus/event-message-classes/event-message-audit';
+import { EventMessageGeneric } from '@/eventbus/event-message-classes/event-message-generic';
+import { MessageEventBus } from '@/eventbus/message-event-bus/message-event-bus';
+import type { MessageEventBusDestinationSentry } from '@/eventbus/message-event-bus-destination/message-event-bus-destination-sentry.ee';
+import type { MessageEventBusDestinationSyslog } from '@/eventbus/message-event-bus-destination/message-event-bus-destination-syslog.ee';
+import type { MessageEventBusDestinationWebhook } from '@/eventbus/message-event-bus-destination/message-event-bus-destination-webhook.ee';
+import { ExecutionRecoveryService } from '@/executions/execution-recovery.service';
+import { Publisher } from '@/scaling/pubsub/publisher.service';
+
 import { createUser } from './shared/db/users';
-import { mockInstance } from '../shared/mocking';
+import type { SuperAgentTest } from './shared/types';
+import * as utils from './shared/utils';
 
-jest.unmock('@/eventbus/MessageEventBus/MessageEventBus');
+jest.unmock('@/eventbus/message-event-bus/message-event-bus');
 jest.mock('axios');
+
+const mockAxiosInstance = mock<ReturnType<typeof axios.create>>();
 const mockedAxios = axios as jest.Mocked<typeof axios>;
+mockedAxios.create.mockReturnValue(mockAxiosInstance);
+
 jest.mock('syslog-client');
 const mockedSyslog = syslog as jest.Mocked<typeof syslog>;
+
+mockInstance(Publisher);
 
 let owner: User;
 let authOwnerAgent: SuperAgentTest;
@@ -80,27 +88,24 @@ async function confirmIdSent(id: string) {
 	expect(sent.find((msg) => msg.id === id)).toBeTruthy();
 }
 
-mockInstance(ExecutionDataRecoveryService);
+mockInstance(ExecutionRecoveryService);
 const testServer = utils.setupTestServer({
 	endpointGroups: ['eventBus'],
 	enabledFeatures: ['feat:logStreaming'],
 });
 
 beforeAll(async () => {
-	owner = await createUser({ role: 'global:owner' });
+	owner = await createUser({ role: GLOBAL_OWNER_ROLE });
 	authOwnerAgent = testServer.authAgentFor(owner);
 
 	mockedSyslog.createClient.mockImplementation(() => new syslog.Client());
-
-	config.set('eventBus.logWriter.logBaseName', 'n8n-test-logwriter');
-	config.set('eventBus.logWriter.keepLogCount', 1);
 
 	eventBus = Container.get(MessageEventBus);
 	await eventBus.initialize();
 });
 
 afterAll(async () => {
-	jest.mock('@/eventbus/MessageEventBus/MessageEventBus');
+	jest.mock('@/eventbus/message-event-bus/message-event-bus');
 	await eventBus?.close();
 });
 
@@ -204,7 +209,7 @@ test('should anonymize audit message to syslog ', async () => {
 			'message',
 			async function handler005(msg: { command: string; data: any }) {
 				if (msg.command === 'appendMessageToLog') {
-					const sent = await eventBus.getEventsAll();
+					await eventBus.getEventsAll();
 					await confirmIdInAll(testAuditMessage.id);
 					expect(mockedSyslogClientLog).toHaveBeenCalled();
 					eventBus.logWriter.worker?.removeListener('message', handler005);
@@ -221,7 +226,7 @@ test('should anonymize audit message to syslog ', async () => {
 			'message',
 			async function handler006(msg: { command: string; data: any }) {
 				if (msg.command === 'appendMessageToLog') {
-					const sent = await eventBus.getEventsAll();
+					await eventBus.getEventsAll();
 					await confirmIdInAll(testAuditMessage.id);
 					expect(mockedSyslogClientLog).toHaveBeenCalled();
 					syslogDestination.disable();
@@ -245,8 +250,8 @@ test('should send message to webhook ', async () => {
 
 	webhookDestination.enable();
 
-	mockedAxios.post.mockResolvedValue({ status: 200, data: { msg: 'OK' } });
-	mockedAxios.request.mockResolvedValue({ status: 200, data: { msg: 'OK' } });
+	mockAxiosInstance.post.mockResolvedValue({ status: 200, data: { msg: 'OK' } });
+	mockAxiosInstance.request.mockResolvedValue({ status: 200, data: { msg: 'OK' } });
 
 	await eventBus.send(testMessage);
 	await new Promise((resolve) => {
@@ -257,7 +262,7 @@ test('should send message to webhook ', async () => {
 					await confirmIdInAll(testMessage.id);
 				} else if (msg.command === 'confirmMessageSent') {
 					await confirmIdSent(testMessage.id);
-					expect(mockedAxios.request).toHaveBeenCalled();
+					expect(mockAxiosInstance.request).toHaveBeenCalled();
 					webhookDestination.disable();
 					eventBus.logWriter.worker?.removeListener('message', handler003);
 					resolve(true);

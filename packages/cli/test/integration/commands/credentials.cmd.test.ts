@@ -1,36 +1,19 @@
-import { Config } from '@oclif/core';
-
-import { InternalHooks } from '@/InternalHooks';
-import { ImportCredentialsCommand } from '@/commands/import/credentials';
-import { LoadNodesAndCredentials } from '@/LoadNodesAndCredentials';
-
-import { mockInstance } from '../../shared/mocking';
-import * as testDb from '../shared/testDb';
-import { getAllCredentials, getAllSharedCredentials } from '../shared/db/credentials';
-import { createMember, createOwner } from '../shared/db/users';
-import { getPersonalProject } from '../shared/db/projects';
+import { getPersonalProject, mockInstance, testDb } from '@n8n/backend-test-utils';
 import { nanoid } from 'nanoid';
 
-const oclifConfig = new Config({ root: __dirname });
+import '@/zod-alias-support';
+import { ImportCredentialsCommand } from '@/commands/import/credentials';
+import { LoadNodesAndCredentials } from '@/load-nodes-and-credentials';
+import { setupTestCommand } from '@test-integration/utils/test-command';
 
-async function importCredential(argv: string[]) {
-	const importer = new ImportCredentialsCommand(argv, oclifConfig);
-	await importer.init();
-	await importer.run();
-}
+import { getAllCredentials, getAllSharedCredentials } from '../shared/db/credentials';
+import { createMember, createOwner } from '../shared/db/users';
 
-beforeAll(async () => {
-	mockInstance(InternalHooks);
-	mockInstance(LoadNodesAndCredentials);
-	await testDb.init();
-});
+mockInstance(LoadNodesAndCredentials);
+const command = setupTestCommand(ImportCredentialsCommand);
 
 beforeEach(async () => {
-	await testDb.truncate(['Credentials', 'SharedCredentials', 'User']);
-});
-
-afterAll(async () => {
-	await testDb.terminate();
+	await testDb.truncate(['CredentialsEntity', 'SharedCredentials', 'User']);
 });
 
 test('import:credentials should import a credential', async () => {
@@ -43,9 +26,7 @@ test('import:credentials should import a credential', async () => {
 	//
 	// ACT
 	//
-	await importCredential([
-		'--input=./test/integration/commands/importCredentials/credentials.json',
-	]);
+	await command.run(['--input=./test/integration/commands/import-credentials/credentials.json']);
 
 	//
 	// ASSERT
@@ -77,9 +58,9 @@ test('import:credentials should import a credential from separated files', async
 	// ACT
 	//
 	// import credential the first time, assigning it to the owner
-	await importCredential([
+	await command.run([
 		'--separate',
-		'--input=./test/integration/commands/importCredentials/separate',
+		'--input=./test/integration/commands/import-credentials/separate',
 	]);
 
 	//
@@ -116,8 +97,8 @@ test('`import:credentials --userId ...` should fail if the credential exists alr
 	const member = await createMember();
 
 	// import credential the first time, assigning it to the owner
-	await importCredential([
-		'--input=./test/integration/commands/importCredentials/credentials.json',
+	await command.run([
+		'--input=./test/integration/commands/import-credentials/credentials.json',
 		`--userId=${owner.id}`,
 	]);
 
@@ -144,8 +125,8 @@ test('`import:credentials --userId ...` should fail if the credential exists alr
 	// Import again while updating the name we try to assign the
 	// credential to another user.
 	await expect(
-		importCredential([
-			'--input=./test/integration/commands/importCredentials/credentials-updated.json',
+		command.run([
+			'--input=./test/integration/commands/import-credentials/credentials-updated.json',
 			`--userId=${member.id}`,
 		]),
 	).rejects.toThrowError(
@@ -187,8 +168,8 @@ test("only update credential, don't create or update owner if neither `--userId`
 	const memberProject = await getPersonalProject(member);
 
 	// import credential the first time, assigning it to a member
-	await importCredential([
-		'--input=./test/integration/commands/importCredentials/credentials.json',
+	await command.run([
+		'--input=./test/integration/commands/import-credentials/credentials.json',
 		`--userId=${member.id}`,
 	]);
 
@@ -212,8 +193,8 @@ test("only update credential, don't create or update owner if neither `--userId`
 	// ACT
 	//
 	// Import again only updating the name and omitting `--userId`
-	await importCredential([
-		'--input=./test/integration/commands/importCredentials/credentials-updated.json',
+	await command.run([
+		'--input=./test/integration/commands/import-credentials/credentials-updated.json',
 	]);
 
 	//
@@ -252,8 +233,8 @@ test('`import:credential --projectId ...` should fail if the credential already 
 	const memberProject = await getPersonalProject(member);
 
 	// import credential the first time, assigning it to the owner
-	await importCredential([
-		'--input=./test/integration/commands/importCredentials/credentials.json',
+	await command.run([
+		'--input=./test/integration/commands/import-credentials/credentials.json',
 		`--userId=${owner.id}`,
 	]);
 
@@ -280,8 +261,8 @@ test('`import:credential --projectId ...` should fail if the credential already 
 	// Import again while updating the name we try to assign the
 	// credential to another user.
 	await expect(
-		importCredential([
-			'--input=./test/integration/commands/importCredentials/credentials-updated.json',
+		command.run([
+			'--input=./test/integration/commands/import-credentials/credentials-updated.json',
 			`--projectId=${memberProject.id}`,
 		]),
 	).rejects.toThrowError(
@@ -316,8 +297,8 @@ test('`import:credential --projectId ...` should fail if the credential already 
 
 test('`import:credential --projectId ... --userId ...` fails explaining that only one of the options can be used at a time', async () => {
 	await expect(
-		importCredential([
-			'--input=./test/integration/commands/importCredentials/credentials-updated.json',
+		command.run([
+			'--input=./test/integration/commands/import-credentials/credentials-updated.json',
 			`--projectId=${nanoid()}`,
 			`--userId=${nanoid()}`,
 		]),

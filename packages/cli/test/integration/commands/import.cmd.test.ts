@@ -1,36 +1,29 @@
-import { Config } from '@oclif/core';
-
-import { InternalHooks } from '@/InternalHooks';
-import { ImportWorkflowsCommand } from '@/commands/import/workflow';
-import { LoadNodesAndCredentials } from '@/LoadNodesAndCredentials';
-
-import { mockInstance } from '../../shared/mocking';
-import * as testDb from '../shared/testDb';
-import { getAllSharedWorkflows, getAllWorkflows } from '../shared/db/workflows';
-import { createMember, createOwner } from '../shared/db/users';
-import { getPersonalProject } from '../shared/db/projects';
+import {
+	mockInstance,
+	testDb,
+	getPersonalProject,
+	getAllSharedWorkflows,
+	getAllWorkflows,
+} from '@n8n/backend-test-utils';
+import { WorkflowPublishHistoryRepository } from '@n8n/db';
 import { nanoid } from 'nanoid';
 
-const oclifConfig = new Config({ root: __dirname });
+import '@/zod-alias-support';
+import { ActiveWorkflowManager } from '@/active-workflow-manager';
+import { ImportWorkflowsCommand } from '@/commands/import/workflow';
+import { LoadNodesAndCredentials } from '@/load-nodes-and-credentials';
+import { setupTestCommand } from '@test-integration/utils/test-command';
 
-async function importWorkflow(argv: string[]) {
-	const importer = new ImportWorkflowsCommand(argv, oclifConfig);
-	await importer.init();
-	await importer.run();
-}
+import { createMember, createOwner } from '../shared/db/users';
 
-beforeAll(async () => {
-	mockInstance(InternalHooks);
-	mockInstance(LoadNodesAndCredentials);
-	await testDb.init();
-});
+mockInstance(LoadNodesAndCredentials);
+mockInstance(ActiveWorkflowManager);
+mockInstance(WorkflowPublishHistoryRepository);
+
+const command = setupTestCommand(ImportWorkflowsCommand);
 
 beforeEach(async () => {
-	await testDb.truncate(['Workflow', 'SharedWorkflow', 'User']);
-});
-
-afterAll(async () => {
-	await testDb.terminate();
+	await testDb.truncate(['WorkflowEntity', 'SharedWorkflow', 'User']);
 });
 
 test('import:workflow should import active workflow and deactivate it', async () => {
@@ -43,9 +36,9 @@ test('import:workflow should import active workflow and deactivate it', async ()
 	//
 	// ACT
 	//
-	await importWorkflow([
+	await command.run([
 		'--separate',
-		'--input=./test/integration/commands/importWorkflows/separate',
+		'--input=./test/integration/commands/import-workflows/separate',
 	]);
 
 	//
@@ -57,8 +50,8 @@ test('import:workflow should import active workflow and deactivate it', async ()
 	};
 	expect(after).toMatchObject({
 		workflows: [
-			expect.objectContaining({ name: 'active-workflow', active: false }),
-			expect.objectContaining({ name: 'inactive-workflow', active: false }),
+			expect.objectContaining({ name: 'active-workflow', active: false, activeVersionId: null }),
+			expect.objectContaining({ name: 'inactive-workflow', active: false, activeVersionId: null }),
 		],
 		sharings: [
 			expect.objectContaining({
@@ -85,8 +78,8 @@ test('import:workflow should import active workflow from combined file and deact
 	//
 	// ACT
 	//
-	await importWorkflow([
-		'--input=./test/integration/commands/importWorkflows/combined/combined.json',
+	await command.run([
+		'--input=./test/integration/commands/import-workflows/combined/combined.json',
 	]);
 
 	//
@@ -98,8 +91,8 @@ test('import:workflow should import active workflow from combined file and deact
 	};
 	expect(after).toMatchObject({
 		workflows: [
-			expect.objectContaining({ name: 'active-workflow', active: false }),
-			expect.objectContaining({ name: 'inactive-workflow', active: false }),
+			expect.objectContaining({ name: 'active-workflow', active: false, activeVersionId: null }),
+			expect.objectContaining({ name: 'inactive-workflow', active: false, activeVersionId: null }),
 		],
 		sharings: [
 			expect.objectContaining({
@@ -116,6 +109,39 @@ test('import:workflow should import active workflow from combined file and deact
 	});
 });
 
+test('import:workflow can import a single workflow object', async () => {
+	//
+	// ARRANGE
+	//
+	const owner = await createOwner();
+	const ownerProject = await getPersonalProject(owner);
+
+	//
+	// ACT
+	//
+	await command.run(['--input=./test/integration/commands/import-workflows/combined/single.json']);
+
+	//
+	// ASSERT
+	//
+	const after = {
+		workflows: await getAllWorkflows(),
+		sharings: await getAllSharedWorkflows(),
+	};
+	expect(after).toMatchObject({
+		workflows: [
+			expect.objectContaining({ name: 'active-workflow', active: false, activeVersionId: null }),
+		],
+		sharings: [
+			expect.objectContaining({
+				workflowId: '998',
+				projectId: ownerProject.id,
+				role: 'workflow:owner',
+			}),
+		],
+	});
+});
+
 test('`import:workflow --userId ...` should fail if the workflow exists already and is owned by somebody else', async () => {
 	//
 	// ARRANGE
@@ -125,8 +151,8 @@ test('`import:workflow --userId ...` should fail if the workflow exists already 
 	const member = await createMember();
 
 	// Import workflow the first time, assigning it to a member.
-	await importWorkflow([
-		'--input=./test/integration/commands/importWorkflows/combined-with-update/original.json',
+	await command.run([
+		'--input=./test/integration/commands/import-workflows/combined-with-update/original.json',
 		`--userId=${owner.id}`,
 	]);
 
@@ -152,8 +178,8 @@ test('`import:workflow --userId ...` should fail if the workflow exists already 
 	// Import the same workflow again, with another name but the same ID, and try
 	// to assign it to the member.
 	await expect(
-		importWorkflow([
-			'--input=./test/integration/commands/importWorkflows/combined-with-update/updated.json',
+		command.run([
+			'--input=./test/integration/commands/import-workflows/combined-with-update/updated.json',
 			`--userId=${member.id}`,
 		]),
 	).rejects.toThrowError(
@@ -189,8 +215,8 @@ test("only update the workflow, don't create or update the owner if `--userId` i
 	const memberProject = await getPersonalProject(member);
 
 	// Import workflow the first time, assigning it to a member.
-	await importWorkflow([
-		'--input=./test/integration/commands/importWorkflows/combined-with-update/original.json',
+	await command.run([
+		'--input=./test/integration/commands/import-workflows/combined-with-update/original.json',
 		`--userId=${member.id}`,
 	]);
 
@@ -214,8 +240,8 @@ test("only update the workflow, don't create or update the owner if `--userId` i
 	// ACT
 	//
 	// Import the same workflow again, with another name but the same ID.
-	await importWorkflow([
-		'--input=./test/integration/commands/importWorkflows/combined-with-update/updated.json',
+	await command.run([
+		'--input=./test/integration/commands/import-workflows/combined-with-update/updated.json',
 	]);
 
 	//
@@ -248,8 +274,8 @@ test('`import:workflow --projectId ...` should fail if the credential already ex
 	const memberProject = await getPersonalProject(member);
 
 	// Import workflow the first time, assigning it to a member.
-	await importWorkflow([
-		'--input=./test/integration/commands/importWorkflows/combined-with-update/original.json',
+	await command.run([
+		'--input=./test/integration/commands/import-workflows/combined-with-update/original.json',
 		`--userId=${owner.id}`,
 	]);
 
@@ -275,8 +301,8 @@ test('`import:workflow --projectId ...` should fail if the credential already ex
 	// Import the same workflow again, with another name but the same ID, and try
 	// to assign it to the member.
 	await expect(
-		importWorkflow([
-			'--input=./test/integration/commands/importWorkflows/combined-with-update/updated.json',
+		command.run([
+			'--input=./test/integration/commands/import-workflows/combined-with-update/updated.json',
 			`--projectId=${memberProject.id}`,
 		]),
 	).rejects.toThrowError(
@@ -305,8 +331,8 @@ test('`import:workflow --projectId ...` should fail if the credential already ex
 
 test('`import:workflow --projectId ... --userId ...` fails explaining that only one of the options can be used at a time', async () => {
 	await expect(
-		importWorkflow([
-			'--input=./test/integration/commands/importWorkflows/combined-with-update/updated.json',
+		command.run([
+			'--input=./test/integration/commands/import-workflows/combined-with-update/updated.json',
 			`--userId=${nanoid()}`,
 			`--projectId=${nanoid()}`,
 		]),
